@@ -1,0 +1,344 @@
+---
+title: "Differential Expression Analysis"
+author: "juba"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    number_sections: no
+    toc: true
+    toc_depth: 6
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    highlight: "tango"
+    df_print: paged
+    code_folding: hide
+    fig_width: 7
+    fig_height: 6
+    css: md_style.css
+
+params:
+  c3m: TRUE
+---
+
+```{r packages, include=FALSE, echo=FALSE, message=FALSE}
+
+library(DESeq2)
+library(edgeR)
+library(dplyr)
+library(tibble)
+library(stringr)
+library(ggplot2)
+library(ggsci)
+library(ggfortify)
+library(ggrepel)
+library(tidyr)
+library(writexl)
+library(readxl)
+library(umap)
+library(DT)
+library(limma)
+library(purrr)
+
+## Palettes :
+MyPalette <- c("#9933aa","#ffdd22","#aa4400","#ff0000","#337722","#00ff66","#005566","#002277",
+               "#441144","#aa0077","#00bbff","#003333","#4422cc","#116611","#330077","#111111",
+               "#667700","#ddaa00","#33ffff","#ff22ff","#ffff33","#00ff00","#0000ff","#444444")
+```
+
+```{r functions, include=FALSE, echo=FALSE, message=FALSE}
+
+My_theme <- function(){
+  theme_minimal()+
+    theme(
+      plot.title = element_text(size = 13,
+                                colour = "midnightblue",
+                                face = "bold"),
+      plot.subtitle = element_text(size = 10,
+                                   colour = "midnightblue"),
+      plot.caption = element_text(size = 10,
+                                  colour = "black",
+                                  face = "bold"),
+      plot.background = element_rect(fill = "white",
+                                     colour = "white"),
+      
+      # customize the panels
+      panel.background = element_rect(colour = "gray80"),
+      panel.grid.major.y = element_line(colour = "gray80",
+                                        linetype = "dotted"),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.y = element_line(colour = "gray80",
+                                        linetype = "dotted"),
+      panel.grid.minor.x = element_blank(),
+      
+      # customize axis
+      axis.title = element_text(size = 10,
+                                face = "bold"),
+      axis.ticks = element_line(size = 1,
+                                colour = "midnightblue"),
+      axis.text = element_text(size = 8,
+                               colour = "black"),
+      
+      # customize legend
+      legend.key = element_blank(),
+      legend.background = element_blank(),
+      legend.position = "bottom",
+      legend.justification = "left",
+      legend.title = element_text(size = 10,
+                                  face = "bold",
+                                  colour = "midnightblue"),
+      legend.text = element_text(size = 8,
+                                 colour = "black")
+      
+    )
+}
+```
+
+```{r ,include=FALSE, echo=FALSE, message=FALSE}
+
+if(params$c3m){
+  out_fig <- "~/Bureau/Projects/RNAseq/Team2_RNAseq/out_fig/"
+  out_obj <- "~/Bureau/Projects/RNAseq/Team2_RNAseq/out_obj/"
+}
+
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Importing the data
+
+```{r c3m,include=params$c3m, eval=params$c3m, echo=FALSE, message=FALSE, warning=FALSE}
+setwd("~/Bureau/Projects/RNAseq/Team2_RNAseq/data/")
+rawcounts <- read.csv("Raw_counts_prefiltered.csv") %>% column_to_rownames("X")
+```
+
+```{r perso,include=params$c3m, eval=params$c3m}
+
+```
+
+```{r ,rows.print=6}
+rawcounts
+```
+
+
+## Data inspection
+
+###  Counts distribution
+
+First, let's check the distribution of the reads among the samples
+
+```{r}
+rawcounts %>% 
+  pivot_longer(cols = colnames(rawcounts),
+               names_to = "Samples",
+               values_to = "Counts") %>% 
+  mutate(Conditions = str_split_i(Samples, "_", 1)) %>% 
+  ggplot()+
+  geom_bar(aes(x= Samples,
+               y= Counts/10^6,
+               fill= Conditions),
+           stat = "identity")+
+  scale_fill_manual(values = c("gold","brown"))+
+  My_theme()+
+  theme(axis.text.x = element_text(size = 12, angle = 25),
+        axis.title.x = element_blank(),
+        legend.title = element_text(size = 12,
+                                  face = "bold",
+                                  colour = "midnightblue"),
+        legend.text = element_text(size = 10,
+                                 colour = "black"))+
+  labs(title = "Read Counts",
+       y = "Counts in million",
+       x = "")
+```
+
+<p class="p2">As we can see, the sample <span class="red">siLuc_n5_S9</span> is most likely an outlier</p>
+
+But we're going to check that with a PCA first before any filtering
+
+### Principal Component Analysis (PCA)
+
+This is a part of the data quality control process. Based on the PCA results, we can assess whether to keep all replicates or if certain samples should be removed due to potential biases or inconsistencies.
+
+
+<p class="p1", style="font-size:18px ; font-weight:600">First, we need to transform the counts !</p>
+
+Having a large number of genes with zero or nearly zero counts can introduce bias, as these genes may be considered equally expressed across samples, which can distort the PCA profile. Low-expression genes contribute mostly noise rather than meaningful variation and may mask important patterns of separation between experimental groups. By filtering out these genes, we focus the PCA on genes with enough expression variability, making it easier to identify outliers and observe true biological differences.
+
+
+-   [Filtering low counts]{style="color:gold ; font-size:18px ; font-weight:600"}
+
+We'll use the CPM (Counts Per Million) function to filter out low counts, followed by log normalization to stabilize variance across samples.
+
+[WHY CPM ?]{style="color:cyan ; font-weight:600 ; font-size:18px"}
+
+CPM corrects for differences in sequencing depth between samples. 1 CPM corresponds to 1 count per million reads, allowing us to compare expression levels on a standardized scale. The formula for CPM is as follows:
+
+\[
+\text{CPM} = \left( \frac{\text{Gene count}}{\text{Sum of the reads in the sample}} \right) \times 1,000,000
+\]
+
+By applying this transformation, we ensure that genes are comparable across samples, despite differences in total read counts. This helps reduce bias and makes it easier to identify meaningful patterns in the PCA. 
+
+```{r}
+cpm_counts <- cpm(rawcounts)
+```
+
+Now we define a threshold for filtering ! 
+
+For the filtering threshold, we set a minimum CPM value of 0.5 in at least 6 samples. This threshold ensures that only genes with sufficient expression across multiple samples are included in the PCA, thereby reducing noise from low-expression genes. A CPM of 0.5 means a gene must have at least 0.5 counts per million reads in each sample, indicating a minimal level of expression relative to sequencing depth. 
+
+Requiring this level in 3 samples (**means that the genes must have over 0.5 CPM in at least 25% the size of our dataset**) ensures that we retain genes expressed across conditions, making the PCA more reliable in capturing true biological variability rather than noise.
+
+
+```{r}
+rawcounts_filt <- rawcounts[rowSums(cpm_counts > 0.5) >= 3,]
+```
+
+-   [Log transformation]{style="color:gold ; font-size:18px ; font-weight:600"}
+
+Now to stabilize the variance we log normalize (recommended before PCA)
+
+```{r}
+log_cpm <- log2(rawcounts_filt + 1)
+```
+
+```{r ,echo=FALSE}
+log_cpm %>% 
+  pivot_longer(cols = colnames(log_cpm),
+               names_to = "Samples",
+               values_to = "Counts (log2)") %>% 
+  mutate(Condition = str_split_i(Samples, "_",1)) %>% 
+  ggplot()+
+  geom_boxplot(aes(x= Samples,
+                   y= `Counts (log2)`,
+                   fill= Condition))+
+  scale_fill_manual(values = c("gold","brown"))+
+  My_theme()+
+  theme(
+    axis.text.x = element_text(angle = 30, size = 10),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )+
+  labs(x= "")
+```
+
+[Here we can distinguish clearly the difference between the outlier sample and the others because we selected only the variable genes]{style="color:cyan ; font-size:18px ; font-weight:600"}
+
+
+-   [Plot the PCA]{style="color:gold ; font-size:18px ; font-weight:600"}
+
+```{r}
+pca_all <- prcomp(t(log_cpm), scale. = T, center = T)
+```
+
+```{r ,echo=FALSE}
+Experimental <- data.frame(Samples = colnames(rawcounts),
+                           Conditions = str_split_i(colnames(rawcounts), "_", 1),
+                           Replicate = str_split_i(colnames(rawcounts), "_", 2))
+```
+
+```{r ,echo=FALSE}
+autoplot(pca_all, 
+         data = Experimental, 
+         colour = "Replicate",
+         shape = "Conditions",
+         size = 5)+
+  labs(title = "PCA")+
+  My_theme()+
+  scale_colour_manual(values = MyPalette)
+```
+
+
+
+
+
+-   [Data correction]{style="color:gold ; font-size:18px ; font-weight:600 ; margin-top:30px"}
+
+Now we remove the replicate n5
+
+```{r ,rows.print=5}
+Experimental <- Experimental[which(Experimental$Replicate != "n5"),]
+log_cpm <- log_cpm[,Experimental$Samples] ; log_cpm
+```
+
+And we do PCA again !
+
+```{r}
+pca_fit <- prcomp(t(log_cpm), scale. = T, center = T)
+```
+
+```{r ,echo=FALSE}
+autoplot(pca_fit, 
+         data = Experimental, 
+         colour = "Replicate",
+         shape = "Conditions",
+         size = 5)+
+  labs(title = "PCA")+
+  My_theme()+
+  scale_colour_manual(values = MyPalette)
+```
+
+
+Temporary
+
+
+```{r}
+counts_filt <- rawcounts[,Experimental$Samples]
+counts_filt <- counts_filt %>% 
+  mutate(max = apply(counts_filt,1,max)) %>% 
+  dplyr::filter(max > 30) %>% 
+  dplyr::select(setdiff(colnames(counts_filt),"max"))
+
+
+DESeqObj <- DESeqDataSetFromMatrix(countData = counts_filt, 
+                                   colData = Experimental,
+                                   design = ~ Conditions)
+DESeqObj$Conditions <- relevel(DESeqObj$Conditions, ref = "siLuc") ## set the control
+dds <- DESeq(DESeqObj)
+
+
+res <- results(dds, 
+               contrast =  c("Conditions","siC8","siLuc"),
+               alpha = 0.05) %>%
+  as.data.frame() %>% 
+  dplyr::filter(padj < 0.05) %>%
+  dplyr::arrange(desc(log2FoldChange))
+
+res %>% 
+  mutate(ENSEMBL = str_split_i(rownames(res),"\\.",1)) -> res 
+
+res %>% 
+  select(ENSEMBL, log2FoldChange, stat, baseMean, padj) %>% 
+  datatable()
+  
+```
+
+
+```{r}
+res %>% 
+  ggplot()+ 
+  geom_point(aes(x = log10(baseMean), 
+                 y = log2FoldChange,
+                 colour = abs(log2FoldChange)>1))+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red")+
+  labs(x= "Mean of normalized count (Log10)",
+       y= "Log2 Fold Change",
+       colour= "log2FC cutoff abs(1)",
+       title = "MA Plot - siC8 vs siLuc")+
+  scale_colour_manual(values = c("TRUE"="darkred",
+                                 "FALSE"="lightgray"),
+                      labels = c("TRUE"="Over",
+                                 "FALSE"="Under"))+
+  guides(colour = guide_legend(override.aes = list(size = 3)),
+         alpha = guide_legend(override.aes = list(size = 3)))+
+  My_theme()
+```
+
+
+
+
+
+
+
+
+
