@@ -3,3 +3,4 @@ out_fig/*
 out_obj/*
 DEAnalysis.html
 README.md
+.ipynb_checkpoints/
