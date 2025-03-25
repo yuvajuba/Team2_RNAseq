@@ -12,13 +12,14 @@ output:
       smooth_scroll: true
     highlight: "tango"
     df_print: paged
-    code_folding: hide
+    # code_folding: hide
     fig_width: 7
     fig_height: 6
     css: md_style.css
 
 params:
   c3m: TRUE
+  save: TRUE
 ---
 
 ```{r packages, include=FALSE, echo=FALSE, message=FALSE}
@@ -39,6 +40,7 @@ library(umap)
 library(DT)
 library(limma)
 library(purrr)
+library(ggvenn)
 
 ## Palettes :
 MyPalette <- c("#9933aa","#ffdd22","#aa4400","#ff0000","#337722","#00ff66","#005566","#002277",
@@ -99,32 +101,98 @@ My_theme <- function(){
 if(params$c3m){
   out_fig <- "~/Bureau/Projects/RNAseq/Team2_RNAseq/out_fig/"
   out_obj <- "~/Bureau/Projects/RNAseq/Team2_RNAseq/out_obj/"
+} else {
+  out_fig <- "/Projects/Team2_RNAseq/out_fig/"
+  out_obj <- "/Projects/Team2_RNAseq/out_obj/"
 }
 
-knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+knitr::opts_chunk$set(echo = F, message = F, warning = F, fig.width = 7, fig.height = 6)
 ```
 
-# Importing the data
+# Importing the data {.tabset .tabset-fade}
 
-```{r c3m,include=params$c3m, eval=params$c3m, echo=FALSE, message=FALSE, warning=FALSE}
+```{r c3m,include=params$c3m, eval=params$c3m}
 setwd("~/Bureau/Projects/RNAseq/Team2_RNAseq/data/")
 rawcounts <- read.csv("Raw_counts_prefiltered.csv") %>% column_to_rownames("X")
+
+if(length(unique(rownames(rawcounts))) == nrow(rawcounts)){
+  rownames(rawcounts) <- str_split_i(rownames(rawcounts), "\\.", 1)
+}
+
+colnames(rawcounts) <- str_split_i(colnames(rawcounts),"_S",1)
+
+Experimental <- data.frame(row.names = colnames(rawcounts),
+                           Conditions = str_split_i(colnames(rawcounts), "_", 1),
+                           Replicate = str_split_i(colnames(rawcounts), "_", 2))
+
 ```
 
-```{r perso,include=params$c3m, eval=params$c3m}
+```{r perso,include=!params$c3m, eval=!params$c3m}
+setwd("/Projects/featureCounts/")
+rawcounts <- read.csv("Raw_counts_prefiltered.csv") %>% column_to_rownames("X")
 
+if(length(unique(rownames(rawcounts))) == nrow(rawcounts)){
+  rownames(rawcounts) <- str_split_i(rownames(rawcounts), "\\.", 1)
+}
+
+colnames(rawcounts) <- str_split_i(colnames(rawcounts),"_S",1)
+
+Experimental <- data.frame(row.names = colnames(rawcounts),
+                           Conditions = str_split_i(colnames(rawcounts), "_", 1),
+                           Replicate = str_split_i(colnames(rawcounts), "_", 2))
 ```
 
-```{r ,rows.print=6}
+## RawCounts
+
+```{r ,rows.print=5}
 rawcounts
 ```
 
+## Metadata
 
-## Data inspection
+```{r ,rows.print=5}
+Experimental
+```
 
-###  Counts distribution
+# Data inspection
 
-First, let's check the distribution of the reads among the samples
+In this section, we will proceed to the inspection of the data (counts distribution, PCA) before filtering.
+
+## Counts distribution
+
+```{r}
+rawcounts %>% 
+  pivot_longer(cols = colnames(rawcounts),
+               names_to = "Samples",
+               values_to = "Counts") %>% 
+  mutate(Conditions = str_split_i(Samples, "_", 1)) %>% 
+  ggplot()+
+  geom_bar(aes(x= Samples,
+               y= Counts/10^6,
+               fill= Conditions),
+           stat = "identity")+
+  scale_fill_manual(values = c("gold","brown"))+
+  My_theme()+
+  theme(axis.text.x = element_text(size = 13, angle = 25),
+        axis.title.x = element_blank(),
+        legend.title = element_text(size = 12,
+                                  face = "bold",
+                                  colour = "midnightblue"),
+        legend.text = element_text(size = 10,
+                                 colour = "black"))+
+  labs(title = "Read Counts",
+       y = "Counts in million",
+       x = "")
+```
+
+Here, we can see that 1 sample (siLuc_n5_S9) has an abnormal read count comparing to the other samples ! this may introduce a bias in our analysis because of the big difference, so the n5 needs to be removed (for both conditions siLuc and siC8 to ensure balance).
+
+So before going any further in this inspection, let's remove the n5 replicate !
+
+```{r ,rows.print=5}
+Experimental <- Experimental[which(Experimental$Replicate != "n5"),]
+rawcounts <- rawcounts[,rownames(Experimental)] ; rawcounts
+```
 
 ```{r}
 rawcounts %>% 
@@ -151,58 +219,75 @@ rawcounts %>%
        x = "")
 ```
 
-<p class="p2">As we can see, the sample <span class="red">siLuc_n5_S9</span> is most likely an outlier</p>
+OK, now let's continue the inspection !
 
-But we're going to check that with a PCA first before any filtering
+Next step is to see if our samples are correctly clustered (grouped) by condition. For example we can run a principal component analysis (PCA) to see that. It is a part of the data quality control process. Based on the PCA results, we can assess whether to keep all the remaining replicates or if certain samples should be removed due to potential biases or inconsistencies.
 
-### Principal Component Analysis (PCA)
+To be more accurate in the result, we need to select the most variable genes, or at least filter out the non variable ones as keeping them will introduce a bias. Having a large number of genes with zero or nearly zero counts can introduce bias, as these genes may be considered equally expressed across samples, which can distort the PCA profile. Low-expression genes contribute mostly noise rather than meaningful variation and may mask important patterns of separation between experimental groups. By filtering out these genes, we focus the PCA on genes with enough expression variability, making it easier to identify outliers and observe true biological differences.
 
-This is a part of the data quality control process. Based on the PCA results, we can assess whether to keep all replicates or if certain samples should be removed due to potential biases or inconsistencies.
+Then we will normalize the counts for the depth of the sequencing for each sample as all the replicates don't have the same number of total reads. So before running the PCA, a filtering and a normalization step are needed !
+
+<p style="margin-top:25px ; color:gold ; font-weight:600">1.  Filtering low counts</p>
+
+First, Filtering out genes with very low count across all the samples (threshold to 30 reads) :
+
+```{r}
+raw_filt <- rawcounts %>% 
+  mutate(M = apply(rawcounts, 1, max)) %>% 
+  filter(M >= 30) %>% 
+  select(-M)
+```
+
+Below is the (before --> after) filtering of the data size !
+
+**`r dim(rawcounts)[1]`**  -->  __`r dim(raw_filt)[1]`__
 
 
-<p class="p1", style="font-size:18px ; font-weight:600">First, we need to transform the counts !</p>
+Then we use the CPM (Counts Per Million reads) function for the next filtering :
 
-Having a large number of genes with zero or nearly zero counts can introduce bias, as these genes may be considered equally expressed across samples, which can distort the PCA profile. Low-expression genes contribute mostly noise rather than meaningful variation and may mask important patterns of separation between experimental groups. By filtering out these genes, we focus the PCA on genes with enough expression variability, making it easier to identify outliers and observe true biological differences.
-
-
--   [Filtering low counts]{style="color:gold ; font-size:18px ; font-weight:600"}
-
-We'll use the CPM (Counts Per Million) function to filter out low counts, followed by log normalization to stabilize variance across samples.
-
-[WHY CPM ?]{style="color:cyan ; font-weight:600 ; font-size:18px"}
-
-CPM corrects for differences in sequencing depth between samples. 1 CPM corresponds to 1 count per million reads, allowing us to compare expression levels on a standardized scale. The formula for CPM is as follows:
+> <p class="cyan">CPM corrects for differences in sequencing depth between samples. 1 CPM corresponds to 1 count per million reads, allowing us to compare expression levels on a standardized scale. The formula for CPM is as follows:</p>
 
 \[
 \text{CPM} = \left( \frac{\text{Gene count}}{\text{Sum of the reads in the sample}} \right) \times 1,000,000
 \]
 
-By applying this transformation, we ensure that genes are comparable across samples, despite differences in total read counts. This helps reduce bias and makes it easier to identify meaningful patterns in the PCA. 
+By applying this transformation, we ensure that genes are comparable across samples, despite differences in total read counts. This helps reduce bias and makes it easier to identify meaningful patterns in the PCA.
 
-```{r}
-cpm_counts <- cpm(rawcounts)
+```{r ,rows.print=5}
+cpm_counts <- cpm(raw_filt)
+cpm_counts %>% as.data.frame()
 ```
 
-Now we define a threshold for filtering ! 
 
-For the filtering threshold, we set a minimum CPM value of 0.5 in at least 6 samples. This threshold ensures that only genes with sufficient expression across multiple samples are included in the PCA, thereby reducing noise from low-expression genes. A CPM of 0.5 means a gene must have at least 0.5 counts per million reads in each sample, indicating a minimal level of expression relative to sequencing depth. 
+<p style="margin-top:25px; margin-bottom:20px">Now, to define a threshold to filter with, we'll concider our metadata !</p>
 
-Requiring this level in 3 samples (**means that the genes must have over 0.5 CPM in at least 25% the size of our dataset**) ensures that we retain genes expressed across conditions, making the PCA more reliable in capturing true biological variability rather than noise.
+> We have 2 conditions <span class="red">**siLuc**</span> which is the control group and <span class="red">**siC8**</span>, the experimental group. As we removed the n5 replicate earlier, we are currently disposing of 10 samples (5 siC8 & 5 siLuc). So fot the threshold, we need to concider a minimum cpm value in at least 3 (less strict) to 5 samples (very strict). Less than 3 or more than 5 would concider more non informative genes. 
+
+And as for the cpm value to make as a minimum threshold, that would be a value that is most commonly used which is a cpm of 0.5 or 1 (means 0.5 or 1 count per million reads).
 
 
-```{r}
-rawcounts_filt <- rawcounts[rowSums(cpm_counts > 0.5) >= 3,]
-```
-
--   [Log transformation]{style="color:gold ; font-size:18px ; font-weight:600"}
-
-Now to stabilize the variance we log normalize (recommended before PCA)
+<p class="cyan">We are keeping genes with a minimum cpm of 0.5 in at least 4 samples</p>
 
 ```{r}
-log_cpm <- log2(rawcounts_filt + 1)
+raw_filt <- raw_filt[rowSums(cpm_counts > 0.5) >= 4,]
 ```
 
-```{r ,echo=FALSE}
+
+<p style="margin-top:25px ; color:gold ; font-weight:600">2.  Normalization</p>
+
+Now we will proceed to a **normalization of the counts** to stabilize the variance !
+
+For RNAseq studies, it is recommanded to use the <span class="purple">__TMM__ (Trimmed Mean of M-values)</span> method from the `edgeR` package to normalize as it corrects the diffreences between libraries size
+
+```{r ,rows.print=5}
+dge <- DGEList(raw_filt)
+dge <- calcNormFactors(dge, method = "TMM")
+dge$samples
+```
+
+```{r}
+log_cpm <- cpm(dge, log = T, prior.count = 1) %>% as.data.frame()
+
 log_cpm %>% 
   pivot_longer(cols = colnames(log_cpm),
                names_to = "Samples",
@@ -215,30 +300,39 @@ log_cpm %>%
   scale_fill_manual(values = c("gold","brown"))+
   My_theme()+
   theme(
-    axis.text.x = element_text(angle = 30, size = 10),
-    legend.title = element_text(size = 12),
-    legend.text = element_text(size = 10)
+    axis.text.x = element_text(angle = 25, size = 13),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
   )+
   labs(x= "")
 ```
 
-[Here we can distinguish clearly the difference between the outlier sample and the others because we selected only the variable genes]{style="color:cyan ; font-size:18px ; font-weight:600"}
 
+## Visualizing data structure
 
--   [Plot the PCA]{style="color:gold ; font-size:18px ; font-weight:600"}
+### MDS Plot (multidimentional scaling)
+
+Based on the distance between expression profiles of the each sample (as we have only 10 samples, this method would be the most accurate)
+
 
 ```{r}
-pca_all <- prcomp(t(log_cpm), scale. = T, center = T)
+group <- factor(Experimental$Conditions)
+
+plotMDS(dge, 
+        labels=colnames(log_cpm), 
+        col = as.numeric(group))
 ```
 
-```{r ,echo=FALSE}
-Experimental <- data.frame(Samples = colnames(rawcounts),
-                           Conditions = str_split_i(colnames(rawcounts), "_", 1),
-                           Replicate = str_split_i(colnames(rawcounts), "_", 2))
-```
+We can see that __n2__ replicate in each condition is globally different from the other replicates of the same condition, we might be considering removing it later but for now we'll keep it  
 
-```{r ,echo=FALSE}
-autoplot(pca_all, 
+
+### PCA (Principal Component Analysis)
+
+
+```{r}
+pca <- prcomp(t(log_cpm), scale. = TRUE)
+
+autoplot(pca, 
          data = Experimental, 
          colour = "Replicate",
          shape = "Conditions",
@@ -248,79 +342,265 @@ autoplot(pca_all,
   scale_colour_manual(values = MyPalette)
 ```
 
+Same observations as the MDS plot !
 
 
+# DEA (Differential Expression Analysis)  {.tabset .tabset-fade}
+
+I'll be using `limma-voom` and `DESeq2` for this DEA ! 
 
 
--   [Data correction]{style="color:gold ; font-size:18px ; font-weight:600 ; margin-top:30px"}
-
-Now we remove the replicate n5
-
-```{r ,rows.print=5}
-Experimental <- Experimental[which(Experimental$Replicate != "n5"),]
-log_cpm <- log_cpm[,Experimental$Samples] ; log_cpm
-```
-
-And we do PCA again !
+## Limma 
 
 ```{r}
-pca_fit <- prcomp(t(log_cpm), scale. = T, center = T)
+# 1-  Creating the design matrix :
+Experimental$Conditions <- factor(Experimental$Conditions, levels = c("siLuc", "siC8"))
+design <- model.matrix(~0 + Conditions, data = Experimental)
+colnames(design) <- levels(Experimental$Conditions)
+
+# 2-  Transformation with voom :
+
+# The voom plot displays the mean-variance trend of the log-transformed counts.
+v <- voom(dge, design, plot = FALSE)
+
+# 3-  Fit a linear model :
+fit <- lmFit(v, design)
+contrast.matrix <- makeContrasts(siC8_vs_siLuc = siC8 - siLuc, levels = design)
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2)
 ```
 
-```{r ,echo=FALSE}
-autoplot(pca_fit, 
-         data = Experimental, 
-         colour = "Replicate",
-         shape = "Conditions",
-         size = 5)+
-  labs(title = "PCA")+
-  My_theme()+
-  scale_colour_manual(values = MyPalette)
-```
+Below are the differentially expressed genes (DEGs) identified using the following thresholds: 
 
+-   absolute log2 fold change (|log2FC|) > 1
+-   adjusted p-value (FDR) < 0.05 
 
-Temporary
-
+These criteria highlight genes that are both statistically significant and show a minimum two-fold change in expression between the siC8 and siLuc conditions.
 
 ```{r}
-counts_filt <- rawcounts[,Experimental$Samples]
-counts_filt <- counts_filt %>% 
-  mutate(max = apply(counts_filt,1,max)) %>% 
-  dplyr::filter(max > 30) %>% 
-  dplyr::select(setdiff(colnames(counts_filt),"max"))
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
 
+res <- topTable(fit2, coef = "siC8_vs_siLuc", number = Inf, adjust = "BH")
+res.sig <- res[res$adj.P.Val < 0.05 & abs(res$logFC) > 1, ]
 
-DESeqObj <- DESeqDataSetFromMatrix(countData = counts_filt, 
-                                   colData = Experimental,
-                                   design = ~ Conditions)
-DESeqObj$Conditions <- relevel(DESeqObj$Conditions, ref = "siLuc") ## set the control
-dds <- DESeq(DESeqObj)
+# Converting ENSEMBL to SYMBOLS
+symbol_map <- bitr(rownames(res.sig), 
+                   fromType = "ENSEMBL", 
+                   toType = "SYMBOL", 
+                   OrgDb = org.Hs.eg.db)
 
+results <- res.sig %>% 
+  mutate(ENSEMBL = rownames(res.sig))
 
-res <- results(dds, 
-               contrast =  c("Conditions","siC8","siLuc"),
-               alpha = 0.05) %>%
-  as.data.frame() %>% 
-  dplyr::filter(padj < 0.05) %>%
-  dplyr::arrange(desc(log2FoldChange))
+results <- left_join(results, symbol_map, by = "ENSEMBL") %>% 
+  mutate(Genes = case_when(is.na(SYMBOL) ~ ENSEMBL,
+                           TRUE ~ SYMBOL)) %>% 
+  dplyr::select(ENSEMBL, Genes, logFC, AveExpr, adj.P.Val, B) %>% 
+  dplyr::distinct(ENSEMBL, .keep_all = T) %>% 
+  dplyr::arrange(desc(logFC))
 
-res %>% 
-  mutate(ENSEMBL = str_split_i(rownames(res),"\\.",1)) -> res 
-
-res %>% 
-  select(ENSEMBL, log2FoldChange, stat, baseMean, padj) %>% 
-  datatable()
-  
+results %>% datatable(options = list(pageLength = 5, scrollX = T))
 ```
 
+
+Below is the result for all the genes !
+
+```{r}
+symbol_all <- bitr(rownames(res), 
+                   fromType = "ENSEMBL", 
+                   toType = "SYMBOL", 
+                   OrgDb = org.Hs.eg.db)
+res <- res %>% 
+  mutate(ENSEMBL = rownames(res))
+res <- left_join(res, symbol_all, by = "ENSEMBL") %>% 
+  mutate(Genes = case_when(is.na(SYMBOL) ~ ENSEMBL,
+                           TRUE ~ SYMBOL)) %>% 
+  dplyr::select(ENSEMBL, Genes, logFC, AveExpr, adj.P.Val, B) %>% 
+  dplyr::distinct(ENSEMBL, .keep_all = T) %>% 
+  dplyr::arrange(desc(logFC))
+
+res %>% datatable(options = list(pageLength = 5, scrollX = T))
+```
+
+
+-   Visualize MA plot :
 
 ```{r}
 res %>% 
   ggplot()+ 
+  geom_point(aes(x = log10(AveExpr), 
+                 y = logFC,
+                 colour = abs(logFC)>1))+
+  geom_hline(yintercept = 1, linetype = 2, color = "navy", linewidth = .8)+
+  geom_hline(yintercept = -1, linetype = 2, color = "navy", linewidth = .8)+
+  labs(x= "Average gene expression (Log10)",
+       y= "Log2 Fold Change",
+       colour= "log2FC cutoff abs(1)",
+       title = "MA Plot - siC8 vs siLuc")+
+  scale_colour_manual(values = c("TRUE"="darkred",
+                                 "FALSE"="lightgray"),
+                      labels = c("TRUE"="Over",
+                                 "FALSE"="Under"))+
+  guides(colour = guide_legend(override.aes = list(size = 3)),
+         alpha = guide_legend(override.aes = list(size = 3)))+
+  My_theme()
+```
+
+-   Visualize volcano plot :
+
+```{r}
+res %>% 
+  ggplot()+
+  geom_point(aes(x= logFC, 
+                 y= -log2(adj.P.Val), 
+                 color = abs(logFC) > 1),
+             alpha = 0.7,
+             size = 2)+
+  scale_colour_manual(values = c("TRUE"= "darkred", "FALSE"= "lightgray"),
+                      labels = c("TRUE"= "Over", "FALSE"= "Under"))+
+  labs(x= "Log2 Fold Change", 
+       y = "-log2(p-value)", 
+       title = "Volcano Plot of DEGs - siC8 vs siLuc",
+       subtitle = "padj cutoff 0.05")+
+  My_theme()+
+  guides(colour = guide_legend(title = "absolute value of log2FC cutoff at 1",
+                               override.aes = list(size = 2.5)))+
+  geom_text_repel(aes(logFC,
+                      -log2(adj.P.Val),
+                      label = ifelse(abs(logFC) > 3.2,
+                                     Genes, "")),
+                  size = 3,
+                  colour = "navy",
+                  max.overlaps = 25)
+```
+
+-   Visualize heatmap :
+
+```{r ,echo=FALSE}
+library(ComplexHeatmap)
+library(circlize)
+
+degsdata <- log_cpm[rownames(log_cpm) %in% results$ENSEMBL, ]
+degsdata <- t(apply(degsdata, 1, scale)) 
+colnames(degsdata) <- colnames(log_cpm)
+
+ColConditions <- c("siC8" = "forestgreen", "siLuc" = "darkred")
+
+# Top annotation
+TopAnnot <- HeatmapAnnotation(Condition = as.factor(Experimental$Condition),
+                              col = list(Condition = ColConditions),
+                              annotation_name_side = "left",
+                              annotation_name_gp = list(fontsize = 10,
+                                                        col = "navy",
+                                                        fontface = "bold"),
+                              annotation_legend_param = list(grid_height = unit(1.7,"cm"),
+                                                             grid_width = unit(0.7,"cm"),
+                                                             labels_gp = gpar(col = "navy",
+                                                                              fontsize = 12),
+                                                             title_gp = gpar(col = "navy",
+                                                                             fontsize = 14,
+                                                                             fontface = "bold")))
+
+# Right annotation
+RightAnnot <- rowAnnotation(
+  "Log2FC" = anno_barplot(results$logFC, 
+                          axis = TRUE, 
+                          bar_width = 2.2, 
+                          border = TRUE,
+                          cex = 1))
+```
+
+```{r ,fig.height=8, fig.width=7}
+Heatmap(degsdata,
+        name = "Z-Score",
+        top_annotation = TopAnnot,
+        right_annotation = RightAnnot,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = F,
+        show_column_names = TRUE,
+        #left_annotation = LeftAnnot,
+        col = colorRamp2(c(-1.7,0,2), c("darkgreen","white","darkred")),
+        show_row_dend = F,
+        column_title = "Heatmap",
+        heatmap_legend_param = list(legend_height = unit(6,"cm"), 
+                                    grid_width = unit(0.8,"cm"), 
+                                    direction = "horizontal",
+                                    legend_width = unit(6.5,"cm")),
+        column_title_gp = gpar(col = "navy",
+                               fontsize = 18,
+                               fontface = "bold")) %>%
+  draw(., heatmap_legend_side = "bottom")
+```
+
+
+```{r ,eval=params$save}
+write_xlsx(res, path = paste0(out_obj,"DEA_allresults_limma.xlsx"))
+write_xlsx(results, path = paste0(out_obj,"DEA_DEGs_limma.xlsx"))
+```
+
+
+## DESeq2
+
+```{r}
+DESeqObj <- DESeqDataSetFromMatrix(countData = dge, 
+                                   colData = Experimental,
+                                   design = ~ Conditions)
+DESeqObj$Conditions <- relevel(DESeqObj$Conditions, ref = "siLuc")
+dds <- DESeq(DESeqObj)
+
+
+res.degseq2 <- results(dds, 
+                       contrast =  c("Conditions","siC8","siLuc"),
+                       alpha = 0.05) %>%
+  as.data.frame()
+```
+
+Below are the differentially expressed genes (DEGs) identified using the following thresholds: 
+
+-   absolute log2 fold change (|log2FC|) > 1
+-   adjusted p-value (FDR) < 0.05 
+
+These criteria highlight genes that are both statistically significant and show a minimum two-fold change in expression between the siC8 and siLuc conditions.
+
+```{r}
+res.degseq2_filt <- res.degseq2 %>% 
+  dplyr::filter(padj < 0.05,
+                abs(log2FoldChange) > 1) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+
+symbol_deseq2 <- bitr(rownames(res.degseq2_filt), 
+                   fromType = "ENSEMBL", 
+                   toType = "SYMBOL", 
+                   OrgDb = org.Hs.eg.db)
+
+res.degseq2_filt <- res.degseq2_filt %>% 
+  mutate(ENSEMBL = rownames(res.degseq2_filt))
+
+res.degseq2_filt <- left_join(res.degseq2_filt, symbol_deseq2, by = "ENSEMBL") %>% 
+  mutate(Genes = case_when(is.na(SYMBOL) ~ ENSEMBL,
+                           TRUE ~ SYMBOL)) %>% 
+  dplyr::select(ENSEMBL, Genes, log2FoldChange, baseMean, padj, stat) %>% 
+  dplyr::distinct(ENSEMBL, .keep_all = T) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+res.degseq2_filt %>% datatable(options = list(pageLength = 5, scrollX = T))
+```
+
+
+-   MA plot
+
+```{r}
+res.degseq2 %>% 
+  ggplot()+ 
   geom_point(aes(x = log10(baseMean), 
                  y = log2FoldChange,
                  colour = abs(log2FoldChange)>1))+
-  geom_hline(yintercept = 0, linetype = "dashed", color = "red")+
+  geom_hline(yintercept = 1, linetype = 2, color = "navy", linewidth = .8)+
+  geom_hline(yintercept = -1, linetype = 2, color = "navy", linewidth = .8)+
   labs(x= "Mean of normalized count (Log10)",
        y= "Log2 Fold Change",
        colour= "log2FC cutoff abs(1)",
@@ -335,8 +615,227 @@ res %>%
 ```
 
 
+-   Visualize heatmap :
+
+```{r ,echo=FALSE}
+degsdata <- log_cpm[rownames(log_cpm) %in% res.degseq2_filt$ENSEMBL, ]
+degsdata <- t(apply(degsdata, 1, scale)) 
+colnames(degsdata) <- colnames(log_cpm)
+
+ColConditions <- c("siC8" = "forestgreen", "siLuc" = "darkred")
+
+# Top annotation
+TopAnnot <- HeatmapAnnotation(Condition = as.factor(Experimental$Condition),
+                              col = list(Condition = ColConditions),
+                              annotation_name_side = "left",
+                              annotation_name_gp = list(fontsize = 10,
+                                                        col = "navy",
+                                                        fontface = "bold"),
+                              annotation_legend_param = list(grid_height = unit(1.7,"cm"),
+                                                             grid_width = unit(0.7,"cm"),
+                                                             labels_gp = gpar(col = "navy",
+                                                                              fontsize = 12),
+                                                             title_gp = gpar(col = "navy",
+                                                                             fontsize = 14,
+                                                                             fontface = "bold")))
+
+# Right annotation
+RightAnnot <- rowAnnotation(
+  "Log2FC" = anno_barplot(res.degseq2_filt$log2FoldChange, 
+                          axis = TRUE, 
+                          bar_width = 2.2, 
+                          border = TRUE,
+                          cex = 1))
+```
+
+```{r ,fig.height=8, fig.width=7}
+Heatmap(degsdata,
+        name = "Z-Score",
+        top_annotation = TopAnnot,
+        right_annotation = RightAnnot,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = F,
+        show_column_names = TRUE,
+        #left_annotation = LeftAnnot,
+        col = colorRamp2(c(-1.7,0,2), c("darkgreen","white","darkred")),
+        show_row_dend = F,
+        column_title = "Heatmap",
+        heatmap_legend_param = list(legend_height = unit(6,"cm"), 
+                                    grid_width = unit(0.8,"cm"), 
+                                    direction = "horizontal",
+                                    legend_width = unit(6.5,"cm")),
+        column_title_gp = gpar(col = "navy",
+                               fontsize = 18,
+                               fontface = "bold")) %>%
+  draw(., heatmap_legend_side = "bottom")
+```
 
 
+```{r ,eval=params$save}
+write_xlsx(res.degseq2, path = paste0(out_obj,"DEA_allresults_DESeq2.xlsx"))
+write_xlsx(res.degseq2_filt, path = paste0(out_obj,"DEA_DEGs_DESeq2.xlsx"))
+```
+
+
+
+
+# Quick comparison
+
+Between Limma and DESeq2
+
+```{r}
+ggvenn(list(Limma = results$Genes,
+            DESeq2 = res.degseq2_filt$Genes))
+```
+
+
+# Removing n2
+
+```{r}
+Experimental <- Experimental[which(Experimental$Replicate != "n2"),]
+rawcounts <- rawcounts[,rownames(Experimental)]
+
+raw_filt <- rawcounts %>% 
+  mutate(M = apply(rawcounts, 1, max)) %>% 
+  filter(M >= 30) %>% 
+  dplyr::select(-M)
+
+cpm_counts <- cpm(raw_filt)
+
+raw_filt <- raw_filt[rowSums(cpm_counts > 0.5) >= 3,]
+
+dge <- DGEList(raw_filt)
+dge <- calcNormFactors(dge, method = "TMM")
+
+log_cpm <- cpm(dge, log = T, prior.count = 1) %>% as.data.frame()
+
+group <- factor(Experimental$Conditions)
+
+plotMDS(dge, 
+        labels=colnames(log_cpm), 
+        col = as.numeric(group))
+```
+
+
+# DEA
+
+```{r}
+DESeqObj <- DESeqDataSetFromMatrix(countData = dge, 
+                                   colData = Experimental,
+                                   design = ~ Conditions)
+DESeqObj$Conditions <- relevel(DESeqObj$Conditions, ref = "siLuc")
+dds <- DESeq(DESeqObj)
+
+
+res.degseq2 <- results(dds, 
+                       contrast =  c("Conditions","siC8","siLuc"),
+                       alpha = 0.05) %>%
+  as.data.frame()
+
+res.degseq2_filt <- res.degseq2 %>% 
+  dplyr::filter(padj < 0.05,
+                abs(log2FoldChange) > 1) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+
+symbol_deseq2 <- bitr(rownames(res.degseq2_filt), 
+                   fromType = "ENSEMBL", 
+                   toType = "SYMBOL", 
+                   OrgDb = org.Hs.eg.db)
+
+res.degseq2_filt <- res.degseq2_filt %>% 
+  mutate(ENSEMBL = rownames(res.degseq2_filt))
+
+res.degseq2_filt <- left_join(res.degseq2_filt, symbol_deseq2, by = "ENSEMBL") %>% 
+  mutate(Genes = case_when(is.na(SYMBOL) ~ ENSEMBL,
+                           TRUE ~ SYMBOL)) %>% 
+  dplyr::select(ENSEMBL, Genes, log2FoldChange, baseMean, padj, stat) %>% 
+  dplyr::distinct(ENSEMBL, .keep_all = T) %>% 
+  dplyr::arrange(desc(log2FoldChange))
+
+res.degseq2_filt %>% datatable(options = list(pageLength = 5, scrollX = T))
+```
+
+-   Visualize heatmap :
+
+```{r ,echo=FALSE}
+degsdata <- log_cpm[rownames(log_cpm) %in% res.degseq2_filt$ENSEMBL, ]
+degsdata <- t(apply(degsdata, 1, scale)) 
+colnames(degsdata) <- colnames(log_cpm)
+
+ColConditions <- c("siC8" = "forestgreen", "siLuc" = "darkred")
+
+# Top annotation
+TopAnnot <- HeatmapAnnotation(Condition = as.factor(Experimental$Condition),
+                              col = list(Condition = ColConditions),
+                              annotation_name_side = "left",
+                              annotation_name_gp = list(fontsize = 10,
+                                                        col = "navy",
+                                                        fontface = "bold"),
+                              annotation_legend_param = list(grid_height = unit(1.7,"cm"),
+                                                             grid_width = unit(0.7,"cm"),
+                                                             labels_gp = gpar(col = "navy",
+                                                                              fontsize = 12),
+                                                             title_gp = gpar(col = "navy",
+                                                                             fontsize = 14,
+                                                                             fontface = "bold")))
+
+# Right annotation
+RightAnnot <- rowAnnotation(
+  "Log2FC" = anno_barplot(res.degseq2_filt$log2FoldChange, 
+                          axis = TRUE, 
+                          bar_width = 2.2, 
+                          border = TRUE,
+                          cex = 1))
+```
+
+```{r ,fig.height=8, fig.width=7}
+Heatmap(degsdata,
+        name = "Z-Score",
+        top_annotation = TopAnnot,
+        right_annotation = RightAnnot,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = F,
+        show_column_names = TRUE,
+        #left_annotation = LeftAnnot,
+        col = colorRamp2(c(-1.7,0,2), c("darkgreen","white","darkred")),
+        show_row_dend = F,
+        column_title = "Heatmap",
+        heatmap_legend_param = list(legend_height = unit(6,"cm"), 
+                                    grid_width = unit(0.8,"cm"), 
+                                    direction = "horizontal",
+                                    legend_width = unit(6.5,"cm")),
+        column_title_gp = gpar(col = "navy",
+                               fontsize = 18,
+                               fontface = "bold")) %>%
+  draw(., heatmap_legend_side = "bottom")
+```
+
+
+The up genes : 
+
+```{r}
+res.degseq2_filt %>% 
+  dplyr::filter(log2FoldChange > 0) %>% 
+  dplyr::pull(Genes)
+```
+
+The down genes : 
+
+```{r}
+res.degseq2_filt %>% 
+  dplyr::filter(log2FoldChange < 0) %>% 
+  dplyr::pull(Genes)
+```
+
+
+
+```{r ,eval=params$save}
+write_xlsx(res.degseq2, path = paste0(out_obj,"allgenes_n2_free.xlsx"))
+write_xlsx(res.degseq2_filt, path = paste0(out_obj,"DEGs_n2_free.xlsx"))
+```
 
 
 
