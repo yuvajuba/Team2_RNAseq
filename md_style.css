@@ -1,0 +1,314 @@
+/* Body */
+body {
+    background-color: black;
+    font-size: 16px;
+    color: white;
+}
+
+
+/* TOC */
+#TOC {
+    margin: 50px 0px 25px 0px;
+}
+
+#TOC.tocify {
+    width: 300px;
+    max-width: 300px;
+    max-height: 70%;
+    overflow-y: scroll;
+    border-radius: 8px;
+    position: fixed;
+    border: 3px solid #9b4;
+}
+
+#TOC ul.tocify-header.list-group {
+    color: black;
+    font-weight: 600;
+}
+
+li.tocify-item.list-group-item.active {
+    background-color: #9b4;
+    color: darkred;
+    font-weight: 600;
+}
+
+li.tocify-item.list-group-item:hover {
+    background-color: #9b4;
+    color: black;
+}
+
+
+/* page disctribution */
+.toc-content.col-xs-12.col-sm-8.col-md-9 {
+    max-width: 1000px;
+    overflow-x: scroll;
+}
+
+/* Ontop Headers */
+#header h1.title.toc-ignore {
+    color:gold;
+    font-weight: 600;
+    padding-top: 10px;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+    margin-top: 10px;
+    font-size: 42px;
+}
+
+#header h4.author {
+    color: cadetblue;
+    font-weight: 600;
+    font-size: 26px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+#header h4.date {
+    color: rgb(153, 181, 182);
+    font-weight: 600;
+    font-size: 26px;
+    margin-top: 10px;
+    margin-bottom: 50px;
+    border-bottom: 4px solid gold;
+    padding-bottom: 30px;
+}
+
+
+/* Titles/Headers */
+h1, h2, h3, h4, h5, h6 {
+    color: #f96;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+h1 {
+    font-size: 28px;
+    margin-left: 0px;
+    margin-top: 120px;
+}
+
+h2 {
+    font-size: 26px;
+    margin-left: 0px;
+    margin-top: 100px;
+}
+
+h3 {
+    font-size: 24px;
+    margin-left: 0px;
+    margin-top: 80px;
+}
+
+h4 {
+    font-size: 23px;
+    margin-left: 0px;
+    margin-top: 65px;
+}
+
+h5 {
+    font-size: 22px;
+    margin-left: 10px;
+    margin-top: 50px;
+}
+
+h6 {
+    font-size: 21px;
+    margin-left: 20px;
+    margin-top: 40px;
+}
+
+
+/* Texts */
+p, p.cyan, p.gold {
+    font-size: 18px;
+    word-spacing: 0px;	
+}
+
+p {
+    color: white;
+}
+
+p.cyan {
+    color: #9ff;
+}
+
+p.gold {
+    color:gold
+}
+
+p.important {
+    font-size: 19px;
+    font-weight: 600;
+    color: white;
+}
+
+span.red {
+    color: #f88;
+}
+
+span.purple {
+    color: #f8f;
+}
+
+
+
+
+
+/* Output text */
+pre:not([class]) {
+    background-color: black;
+}
+
+pre {
+    color: white;
+    font-size: 14px;
+    font-family: Georgia;
+    overflow-y: scroll;
+    max-height: 15cm;
+}
+
+pre.sourceCode.r {
+    background-color: black;
+}
+
+.r-code-collapse.collapse.in {
+    background-color: black;
+}
+
+
+/* Tables */
+.pagedtable-wrapper {
+    border: 0.5px solid #777;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+thead {
+    background-color: #379;
+    border: 2px solid white;
+}
+
+.pagedtable-header-name {
+    color:gold;
+    font-size: 18px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.pagedtable-header-type {
+    color:black;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+}
+
+tbody {
+    border: 2px solid white;
+    font-size: 15px;
+    font-weight: 600;
+    color: white;
+    background-color: black;
+}
+
+tbody tr td {
+    text-align: center !important;
+}
+
+.pagedtable-footer a.pagedtable-index-nav {
+    color: #afa;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.pagedtable-index-nav.pagedtable-index-nav-disabled {
+    color: lightgray;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.pagedtable-footer .pagedtable-indexes a.pagedtable-index {
+    color: #afa;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.pagedtable-footer .pagedtable-indexes a.pagedtable-index.pagedtable-index-current {
+    color: lightgray;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.pagedtable-footer .pagedtable-info {
+    color:gold;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+
+/* Datatables */
+div.dataTables_length {
+    color: white;
+}
+
+div.dataTables_length label {
+    color: #afa;
+}
+
+div.dataTables_filter {
+    color: white;
+}
+
+div.dataTables_filter label {
+    color: #afa;
+}
+
+table.display.dataTable.no-footer.table.table-condensed thead tr th {
+    color: gold;
+    text-align: center;
+    font-weight: 700;
+    font-size: 20px;
+}
+
+div.dataTables_info {
+    color: gold;
+}
+
+div.dataTables_paginate.paging_simple_numbers {
+    color: #afa;
+}
+
+
+/* Tablists */
+ul.nav.nav-pills {
+    margin-top: 25px;
+    margin-bottom: 15px;
+}
+
+ul.nav.nav-pills li.active a {
+    font-weight: 600;
+    font-size: 18px;
+    color: darkred;
+    background-color: #9b4;
+}
+
+ul.nav.nav-pills li a {
+    font-size: 18px;
+    color: #9b4;
+}
+
+ul.nav.nav-tabs {
+    margin-top: 25px;
+    margin-bottom: 15px;
+}
+
+ul.nav.nav-tabs li.active a {
+    font-weight: 600;
+    font-size: 18px;
+    color: darkred;
+    background-color: #9b4;
+}
+
+ul.nav.nav-tabs li a {
+    font-size: 18px;
+    color: #9b4;
+}
