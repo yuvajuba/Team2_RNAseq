@@ -4,3 +4,7 @@ out_obj/*
 DEAnalysis.html
 README.md
 .ipynb_checkpoints/
+.Rproj.user
+.Rhistory
+Team2_RNAseq.Rproj
+
