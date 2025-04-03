@@ -50,6 +50,7 @@ library(AnnotationDbi)
 library(fgsea)
 library(enrichplot)
 library(shiny)
+library(EnhancedVolcano)
 
 ## Palettes :
 MyPalette <- c("#9933aa","#ffdd22","#aa4400","#ff0000","#337722","#00ff66","#005566","#002277",
@@ -436,6 +437,13 @@ res %>%
   geom_vline(xintercept = 1, linetype = 2, color = "darkgray", linewidth = .6)
 ```
 
+- Enhanced volcano
+
+```{r}
+EnhancedVolcano(res, x = "log2FoldChange", y = "padj", lab = res$Gene_name)
+```
+
+
 
 -   Visualize heatmap :
 
@@ -563,188 +571,7 @@ AllResults %>%
 ```
 
 
-# Pathways Enrichment
 
-
-
-[Creating a vector with the log2FC named with the DEGs]{style="font-weight:600 ; font-size:120% ; margin-top:30px ; margin-bottom:20px"}
-
-```{r}
-AllResults %>% 
-  dplyr::filter(padj < 0.05, 
-                abs(log2FoldChange) > 1,
-                Gene_type == "protein_coding") %>%
-  dplyr::arrange(log2FoldChange) %>% 
-  dplyr::select(Gene_name, log2FoldChange) -> fc
-
-fc <- setNames(fc$log2FoldChange, fc$Gene_name) ; head(fc,20)
-```
-
-
-
-
-## GO   {.tabset .tabset-fade}
-
-### Table results  {.unlisted .unnumbered .tabset .tabset-pills}
-
-Down below the results !!
-
-#### All DEGs  {.unlisted .unnumbered}
-
-```{r ,class.source="fold-hide", echo=TRUE}
-en.go.all <- enrichGO(gene = names(fc),
-                     OrgDb = "org.Hs.eg.db",
-                     keyType = "SYMBOL",
-                     minGSSize = 10,
-                     maxGSSize = 200,
-                     readable = T,
-                     ont = "BP")
-
-go_res_all <- en.go.all@result %>% 
-  dplyr::filter(p.adjust < 0.05) %>% 
-  arrange(p.adjust)
-
-go_res_all %>% datatable(options = list(pageLength = 10, scrollX = T))
-```
-
-#### Down genes  {.unlisted .unnumbered}
-
-```{r ,class.source="fold-hide", echo=TRUE}
-en.go.down <- enrichGO(gene = names(fc[fc<0]),
-                     OrgDb = "org.Hs.eg.db",
-                     keyType = "SYMBOL",
-                     minGSSize = 10,
-                     maxGSSize = 200,
-                     readable = T,
-                     ont = "BP")
-
-go_res_down <- en.go.down@result %>% 
-  dplyr::filter(p.adjust < 0.05) %>% 
-  arrange(p.adjust)
-
-go_res_down %>% datatable(options = list(pageLength = 10, scrollX = T))
-```
-
-#### Up genes  {.unlisted .unnumbered}
-
-```{r ,class.source="fold-hide", echo=TRUE}
-en.go.up <- enrichGO(gene = names(fc[fc>0]),
-                     OrgDb = "org.Hs.eg.db",
-                     keyType = "SYMBOL",
-                     minGSSize = 10,
-                     maxGSSize = 200,
-                     readable = T,
-                     ont = "BP")
-
-go_res_up <- en.go.up@result %>% 
-  dplyr::filter(p.adjust < 0.05) %>% 
-  arrange(p.adjust)
-
-go_res_up %>% datatable(options = list(pageLength = 10, scrollX = T))
-```
-
-
-
-
-### Dot plots  {.unlisted .unnumbered .tabset .tabset-pills}
-
-Down below the results !
-
-#### All DEGs  {.unlisted .unnumbered}
-
-```{r ,fig.height=10}
-dotplot(en.go.all, 
-        showCategory = 20, x="RichFactor", size="Count")
-```
-
-#### Down genes  {.unlisted .unnumbered}
-
-```{r ,fig.height=10}
-dotplot(en.go.down, 
-        showCategory = 20, x="RichFactor", size="Count")
-```
-
-#### Up genes  {.unlisted .unnumbered}
-
-```{r ,fig.height=10}
-dotplot(en.go.up, 
-        showCategory = 20, x="RichFactor", size="Count")
-```
-
-
-
-
-
-
-
-
-## GSEA
-
-```{r}
-
-r <- setNames(AllResults$Rank, AllResults$ENSEMBL)
-
-gsea.obj <- gseGO(geneList  = r,
-                  OrgDb = org.Hs.eg.db,
-                  ont = "BP",
-                  keyType = "ENSEMBL",
-                  minGSSize = 10,
-                  maxGSSize = 500,
-                  pvalueCutoff = 0.05,
-                  verbose  = FALSE,
-                  nPermSimple = 10000) %>% 
-            setReadable(OrgDb = 'org.Hs.eg.db', keyType = "ENSEMBL")
-
-gsea.result <- gsea.obj@result %>% 
-  dplyr::select(Description, setSize, NES, p.adjust, rank)
-
-gsea.result %>% datatable(options = list(pageLength = 5, scrollX = TRUE))
-```
-
-```{r ,fig.height=12}
-
-dotplot(gsea.obj, 
-            showCategory=25, 
-            color = "p.adjust", 
-            x="NES")+
-      scale_size_continuous(range = c(3,8))+
-      theme(axis.text = element_text(face = "bold"),
-            axis.title = element_text(size = 12, face = "bold", colour = "darkred"))
-```
-
-```{r}
-selected_IDs <- c("GO:0051231","GO:0051983","GO:0044784")
-gseaplot2(gsea.obj, 
-              geneSetID = selected_IDs, 
-              color = MyPalette[seq_along(selected_IDs)], 
-              pvalue_table = F, 
-              subplots = 1:2, base_size = 13, rel_heights = c(2,0.5,1))
-```
-
-
-
-
-```{r ,fig.height=10, fig.width=10, eval=FALSE}
-shinyApp(
-  
-  #### User Interface ----------------------------------------------------------
-  ui = fluidPage(
-    
-    fluidRow(
-      column(width = 3,
-             selectInput(inputId = "sel_terms",
-                         label = "Select terms",
-                         choices = ))
-    )
-  )
-  
-  
-  #### Server function  --------------------------------------------------------
-  
-  
-  #### The end
-)
-```
 
 
 

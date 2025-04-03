@@ -51,6 +51,7 @@ library(fgsea)
 library(enrichplot)
 library(shiny)
 library(EnhancedVolcano)
+library(openxlsx)
 
 ## Palettes :
 MyPalette <- c("#9933aa","#ffdd22","#aa4400","#ff0000","#337722","#00ff66","#005566","#002277",
@@ -333,6 +334,12 @@ res <- results(dds,
   dplyr::filter(!(is.na(padj)))
 ```
 
+```{r}
+# removing genes with no p values from the raw counts
+raw_filt <- raw_filt[res$Geneid,]
+```
+
+
 Below are the differentially expressed genes (DEGs) identified using the following thresholds: 
 
 -   absolute log2 fold change (|log2FC|) > 1
@@ -366,8 +373,9 @@ res_protcoding %>% datatable(options = list(pageLength = 5, scrollX = T))
 
 ```{r}
 n_fact <- estimateSizeFactorsForMatrix(raw_filt)
-n_counts_log <- sweep(raw_filt, 2, n_fact, FUN="/")
-n_counts_log <- log10(n_counts_log+1)
+n_counts <- sweep(raw_filt, 2, n_fact, FUN="/")
+n_counts_log2 <- log2(n_counts+1)
+n_counts_log <- log10(n_counts+1)
 ```
 
 
@@ -508,33 +516,50 @@ h1+h2+h3
 [Down below is the whole table containing all the results we need]{style="font-size:140% ; font-weight:600 ; color:purple ; margin-top:30px ; margin-bottom:20px"}
 
 ```{r ,echo=TRUE, class.source='fold-hide'}
-AllResults <- n_counts_log %>% 
-  rownames_to_column(var = "Geneid") %>% 
-  inner_join(res, by = "Geneid") %>% 
-  column_to_rownames(var = "Geneid")  %>% 
-  dplyr::mutate(Log_baseMean = log10(baseMean),
-                Mean_siC8 = apply(n_counts_log[res$Geneid,1:4],1,mean),
-                Mean_siLuc = apply(n_counts_log[res$Geneid,5:8],1,mean),
-                Rank = ifelse(padj <= 1e-20,
-                              round(log2FoldChange*(-log10(1e-20))/30, 4),
-                              ifelse(padj <= 1e-5,
-                                     round(log2FoldChange*(-log10(1e-5))/30, 4),
-                                     ifelse(padj <= 0.1,
-                                            round(log2FoldChange*(-log10(padj))/30, 4),
-                                            round(log2FoldChange*(-log10(0.5))/30, 4)))),
-                ENSEMBL = str_split_i(rownames(n_counts_log[res$Geneid,]),"\\.",1)) %>% 
-  dplyr::select(Gene_name,Mean_siC8,Mean_siLuc,Log_baseMean,log2FoldChange,
-                padj,Rank,baseMean,siC8_n1,siC8_n3,siC8_n4,siC8_n6,siLuc_n1,
-                siLuc_n3,siLuc_n4,siLuc_n6,Gene_type,ENSEMBL) %>% 
-  dplyr::arrange(desc(Rank)) %>% 
-  dplyr::mutate(Rank_index = seq(1,nrow(n_counts_log[res$Geneid,])))
+colnames(n_counts_log2) <- paste0(colnames(n_counts_log2),"_log2")
+colnames(n_counts_log) <- paste0(colnames(n_counts_log),"_log10")
+colnames(n_counts) <- paste0("norm_",colnames(n_counts))
+AllResults <- cbind(raw_filt, n_counts, n_counts_log2, n_counts_log)
 
-AllResults %>% datatable(options = list(pageLength = 20, scrollX = T))
+AllResults2 <- res  %>% 
+  column_to_rownames(var = "Geneid") %>% 
+  dplyr::mutate(Log_baseMean = log10(baseMean),
+                Mean_siC8 = apply(n_counts_log2[res$Geneid,1:4],1,mean),
+                Mean_siLuc = apply(n_counts_log2[res$Geneid,5:8],1,mean),
+                Rank = ifelse(padj <= 1e-30,
+                              round(log2FoldChange*(-log10(1e-30))/20, 4),
+                              ifelse(padj <= 1e-10,
+                                     round(log2FoldChange*(-log10(1e-10))/20, 4),
+                                     ifelse(padj <= 1e-5,
+                                            round(log2FoldChange*(-log10(1e-5))/20, 4),
+                                            ifelse(padj <= 0.1,
+                                                   round(log2FoldChange*(-log10(padj))/20, 4),
+                                                   round(log2FoldChange*(-log10(0.5))/20, 4))))),
+                ENSEMBL = str_split_i(rownames(n_counts_log2[res$Geneid,]),"\\.",1)) %>% 
+  dplyr::arrange(desc(Rank)) %>% 
+  dplyr::mutate(Rank_index = seq(1,nrow(n_counts_log2[res$Geneid,]))) %>% 
+  dplyr::select(ENSEMBL,Gene_name,baseMean,log2FoldChange,padj,Gene_type,
+                Mean_siC8,Mean_siLuc,Log_baseMean,Rank,Rank_index)
+
+AllResults2 %>% datatable(options = list(pageLength = 20, scrollX = T))
 ```
 
 ```{r ,eval=params$save}
+# write.xlsx(list(Count_table = AllResults, DEA_results = AllResults2),
+#            file = paste0(out_obj,"AllResults.xlsx"),
+#            rowNames = TRUE)
+
 AllResults %>% 
-  rownames_to_column(var = "ID") %>% 
+  rownames_to_column(var = "Geneid") %>% 
+  write_xlsx(path = paste0(out_obj,"Counts_table.xlsx"))
+
+AllResults2 %>% 
+  write_xlsx(path = paste0(out_obj,"DEA_results.xlsx"))
+
+all <- merge(AllResults2, AllResults, by = 0)
+all %>% 
+  column_to_rownames(var = "Row.names") %>% 
+  dplyr::arrange(desc(Rank)) %>% 
   write_xlsx(path = paste0(out_obj,"AllResults.xlsx"))
 ```
 
@@ -548,12 +573,20 @@ AllResults %>%
   font-weight:600
 }
 
+.scroll-100-2 {
+  max-height: 250px;
+  overflow-y: auto;
+  background-color: inherit;
+  color: darkgreen;
+  font-weight:600
+}
+
 ```
 
 - Up regulated genes:
 
 ```{r ,class.output="scroll-100"}
-AllResults %>% 
+AllResults2 %>% 
   dplyr::filter(padj < 0.05, 
                 log2FoldChange > 1,
                 Gene_type == "protein_coding") %>% 
@@ -562,8 +595,8 @@ AllResults %>%
 
 - Down regulated genes:
 
-```{r ,class.output="scroll-100"}
-AllResults %>% 
+```{r ,class.output="scroll-100-2"}
+AllResults2 %>% 
   dplyr::filter(padj < 0.05, 
                 log2FoldChange < -1,
                 Gene_type == "protein_coding") %>% 
@@ -577,6 +610,21 @@ AllResults %>%
 
 
 
+# add
+
+```{r}
+# all %>% 
+#   dplyr::filter(Gene_name %in% c("DPM1")) %>% 
+#   dplyr::select(Gene_name, grep("_log10", colnames(all), value = T)) %>% 
+#   column_to_rownames(var = "Gene_name") -> tmp
+# 
+# 
+# tmp %>% 
+#   pivot_longer(names_to = "Sample", values_to = "LogExp", cols = 1:8) %>% 
+#   ggplot()+
+#   geom_boxplot(aes(x= Sample,
+#                    y= LogExp))
+```
 
 
 
